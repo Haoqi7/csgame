@@ -198,7 +198,11 @@ const CONFIG = {
         ai: 0.7
     },
     SPAWN_RATE: 0.03,
-    RESOURCE_SPAWN_CHANCE: 0.35
+    RESOURCE_SPAWN_CHANCE: 0.35,
+    UNIT_BASE_HEALTH: 100,
+    AI_SPAWN_INTERVAL: 5000,
+    PLAYER_SPAWN_AREA: { x: [3, 8], y: [3, 8] },
+    AI_SPAWN_AREA: { x: [23, 28], y: [23, 28] }
 };
 
 const gameState = {
@@ -322,8 +326,19 @@ class GameCore {
         gameState.map = TerrainGenerator.generate();
         this.setupEventListeners();
         requestAnimationFrame(this.loop.bind(this));
+        gameState.camera = { 
+        x: window.innerWidth/2,  // 初始居中
+        y: window.innerHeight/2,
+        scale: 1 
+    };
+    this.centerCamera();
     }
-
+    static centerCamera() {
+    const mapCenterX = (CONFIG.MAP_SIZE * CONFIG.CELL_SIZE * 1.732) / 2;
+    const mapCenterY = (CONFIG.MAP_SIZE * CONFIG.CELL_SIZE * 1.5) / 2;
+    gameState.camera.x = window.innerWidth/2 - mapCenterX * gameState.camera.scale;
+    gameState.camera.y = window.innerHeight/2 - mapCenterY * gameState.camera.scale;
+}
     static loop(timestamp) {
         ctx.setTransform(1, 0, 0, 1, 0, 0);
         ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -341,6 +356,15 @@ class GameCore {
     }
 
     static drawTerrain() {
+        ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+        ctx.lineWidth = 1;
+        gameState.map.forEach((col, x) => {
+            col.forEach((cell, y) => {
+                const [screenX, screenY] = this.gridToScreen(x, y);
+                this.drawHex(screenX, screenY, CONFIG.CELL_SIZE);
+                ctx.stroke();
+            });
+        });    
         gameState.map.forEach((col, x) => {
             col.forEach((cell, y) => {
                 const [screenX, screenY] = this.gridToScreen(x, y);
@@ -359,9 +383,13 @@ class GameCore {
     }
 
     static drawUnits() {
+        
     const aiColor = getComputedStyle(document.documentElement).getPropertyValue('--ai-color').trim();
     const secondaryColor = getComputedStyle(document.documentElement).getPropertyValue('--secondary-color').trim();
-
+    ctx.fillStyle = 'white';
+    ctx.font = '14px Arial';
+    ctx.fillText(`Selected: ${gameState.selectedUnit?.id || 'None'}`, 10, 20);
+    ctx.fillText(`Camera: ${gameState.camera.x.toFixed(1)},${gameState.camera.y.toFixed(1)} scale:${gameState.camera.scale.toFixed(2)}`, 10, 40);
     gameState.units.forEach(unit => {
         const [screenX, screenY] = this.gridToScreen(...unit.position);
         const color = unit.owner === 'player' ? unit.stats.color : 
@@ -377,7 +405,18 @@ class GameCore {
         ctx.translate(screenX, screenY);
         unit.icon(ctx, 0, 0, CONFIG.CELL_SIZE/2);
         ctx.restore();
+        // 增加图标绘制尺寸
+        ctx.save();
+        ctx.translate(screenX, screenY);
+        ctx.scale(1.5, 1.5); // 放大图标
+        unit.icon(ctx, 0, 0, CONFIG.CELL_SIZE/2);
+        ctx.restore();
 
+        // 绘制调试标记
+        ctx.fillStyle = 'white';
+        ctx.font = '12px Arial';
+        ctx.fillText(`${unit.type} (${Math.round(unit.position[0])},${Math.round(unit.position[1])})`, 
+                    screenX + 20, screenY - 20);
         // 绘制选择指示器
         if (gameState.selectedUnit?.id === unit.id) {
             ctx.strokeStyle = secondaryColor;
@@ -567,6 +606,17 @@ class GameCore {
             };
         });
 
+
+        let initialDistance = null;
+
+        canvas.addEventListener('touchstart', e => {
+            if (e.touches.length === 2) {
+                initialDistance = Math.hypot(
+                    e.touches[0].clientX - e.touches[1].clientX,
+                    e.touches[0].clientY - e.touches[1].clientY
+                );
+            }
+        });
         canvas.addEventListener('touchmove', e => {
             if (!isGameActive) return;
             e.preventDefault();
@@ -581,31 +631,39 @@ class GameCore {
                 };
             }
         });
+canvas.addEventListener('touchend', e => {
+    if (!isGameActive) return;
+    if (Date.now() - touchStartPos.time < 200) {
+        const rect = canvas.getBoundingClientRect();
+        const rawX = touchStartPos.x - rect.left;
+        const rawY = touchStartPos.y - rect.top;
+        
+        // 应用相机变换
+        const gameX = (rawX - gameState.camera.x) / gameState.camera.scale;
+        const gameY = (rawY - gameState.camera.y) / gameState.camera.scale;
 
-        canvas.addEventListener('touchend', e => {
-            if (!isGameActive) return;
-            if (Date.now() - touchStartPos.time < 200) {
-                const rect = canvas.getBoundingClientRect();
-                const touchX = (touchStartPos.x - rect.left - gameState.camera.x) / gameState.camera.scale;
-                const touchY = (touchStartPos.y - rect.top - gameState.camera.y) / gameState.camera.scale;
-                
-                const gridY = Math.round(touchY / (CONFIG.CELL_SIZE * 1.5));
-                const gridX = Math.round((touchX / (CONFIG.CELL_SIZE * 1.732)) + gridY/2);
-                
-                const selected = gameState.units.find(u => 
-                    u.owner === 'player' &&
-                    Math.abs(u.position[0] - gridX) < 1 &&
-                    Math.abs(u.position[1] - gridY) < 1
-                );
-                
-                if (selected) {
-                    gameState.selectedUnit = selected;
-                } else if (gameState.selectedUnit) {
-                    gameState.selectedUnit.target = [gridX, gridY];
-                    gameState.selectedUnit = null;
-                }
-            }
+        // 精确转换为网格坐标
+        const gridY = Math.round(gameY / (CONFIG.CELL_SIZE * 1.5));
+        const gridX = Math.round((gameX / (CONFIG.CELL_SIZE * 1.732)) + gridY/2);
+
+        console.log(`点击位置：屏幕(${rawX},${rawY}) 游戏(${gameX},${gameY}) 网格(${gridX},${gridY})`);
+
+        // 单位选择逻辑
+        const selected = gameState.units.find(u => {
+            const dx = u.position[0] - gridX;
+            const dy = u.position[1] - gridY;
+            return Math.sqrt(dx*dx + dy*dy) < 1.5; // 扩大选择范围
         });
+
+        if (selected && selected.owner === 'player') {
+            gameState.selectedUnit = selected;
+            console.log('选中单位:', selected);
+        } else if (gameState.selectedUnit) {
+            console.log('下达移动指令至:', gridX, gridY);
+            gameState.selectedUnit.target = [gridX, gridY];
+        }
+    }
+});
 
         window.addEventListener('blur', () => isGameActive = false);
         window.addEventListener('focus', () => isGameActive = true);
@@ -624,6 +682,9 @@ function startGame() {
             gameInitialized = true;
         }
     }, 500);
+    // 生成测试单位
+    gameState.units.push(new AdvancedUnit('infantry', 5, 5, 'player'));
+    gameState.units.push(new AdvancedUnit('ai', 25, 25, 'ai'));
 }
 
 window.spawnUnit = function(type) {
