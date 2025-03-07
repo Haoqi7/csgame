@@ -351,10 +351,24 @@ class GameCore {
         this.drawUnits();
         this.updateGame(timestamp);
         ctx.restore();
-        
+        this.applyCameraBounds(); // 新增边界应用
         requestAnimationFrame(this.loop.bind(this));
     }
+    static applyCameraBounds() {
+    const viewportWidth = canvas.width / gameState.camera.scale;
+    const viewportHeight = canvas.height / gameState.camera.scale;
+    
+    const mapWidth = CONFIG.MAP_SIZE * CONFIG.CELL_SIZE * 1.732;
+    const mapHeight = CONFIG.MAP_SIZE * CONFIG.CELL_SIZE * 1.5;
+    
+    const minX = Math.min(0, canvas.width - mapWidth * gameState.camera.scale);
+    const minY = Math.min(0, canvas.height - mapHeight * gameState.camera.scale);
+    const maxX = 0;
+    const maxY = 0;
 
+    gameState.camera.x = Math.max(minX, Math.min(maxX, gameState.camera.x));
+    gameState.camera.y = Math.max(minY, Math.min(maxY, gameState.camera.y));
+}
     static drawTerrain() {
         ctx.strokeStyle = 'rgba(255,255,255,0.2)';
         ctx.lineWidth = 1;
@@ -591,46 +605,86 @@ class GameCore {
         document.getElementById('unitCount').textContent = 
             gameState.units.filter(u => u.owner === 'player').length;
     }
+// 新增相机边界限制方法
+static centerCamera() {
+    const viewportWidth = canvas.width / gameState.camera.scale;
+    const viewportHeight = canvas.height / gameState.camera.scale;
+    
+    const mapWidth = CONFIG.MAP_SIZE * CONFIG.CELL_SIZE * 1.732;
+    const mapHeight = CONFIG.MAP_SIZE * CONFIG.CELL_SIZE * 1.5;
+    
+    // 计算有效边界
+    const minX = Math.min(0, canvas.width - mapWidth * gameState.camera.scale);
+    const minY = Math.min(0, canvas.height - mapHeight * gameState.camera.scale);
+    const maxX = 0;
+    const maxY = 0;
 
+    gameState.camera.x = Math.max(minX, Math.min(maxX, gameState.camera.x));
+    gameState.camera.y = Math.max(minY, Math.min(maxY, gameState.camera.y));
+}
     static setupEventListeners() {
-        let touchStartPos = null;
-        let isGameActive = true;
-        
-        canvas.addEventListener('touchstart', e => {
-            if (!isGameActive) return;
-            e.preventDefault();
+    let touchStartPos = null;
+    let isDragging = false;
+    const minScale = 0.5;
+    const maxScale = 3;
+    
+    // 正确配置事件监听选项
+    const passiveOptions = { passive: false };
+
+    // 触摸开始事件
+    canvas.addEventListener('touchstart', e => {
+        if (e.touches.length === 1) {
             touchStartPos = {
                 x: e.touches[0].clientX,
                 y: e.touches[0].clientY,
-                time: Date.now()
+                cameraX: gameState.camera.x,
+                cameraY: gameState.camera.y
             };
-        });
+            isDragging = true;
+            e.preventDefault(); // 阻止默认滚动行为
+        }
+    }, passiveOptions);
 
-
-        let initialDistance = null;
-
-        canvas.addEventListener('touchstart', e => {
-            if (e.touches.length === 2) {
-                initialDistance = Math.hypot(
-                    e.touches[0].clientX - e.touches[1].clientX,
-                    e.touches[0].clientY - e.touches[1].clientY
-                );
-            }
-        });
-        canvas.addEventListener('touchmove', e => {
-            if (!isGameActive) return;
+    // 触摸移动事件
+    canvas.addEventListener('touchmove', e => {
+        if (!isDragging) return;
+        
+        if (e.touches.length === 1) {
+            const deltaX = e.touches[0].clientX - touchStartPos.x;
+            const deltaY = e.touches[0].clientY - touchStartPos.y;
+            
+            // 应用缩放比例的逆向补偿
+            gameState.camera.x = touchStartPos.cameraX + deltaX / gameState.camera.scale;
+            gameState.camera.y = touchStartPos.cameraY + deltaY / gameState.camera.scale;
+            
             e.preventDefault();
-            if (e.touches.length === 1) {
-                const deltaX = e.touches[0].clientX - touchStartPos.x;
-                const deltaY = e.touches[0].clientY - touchStartPos.y;
-                gameState.camera.x += deltaX;
-                gameState.camera.y += deltaY;
-                touchStartPos = {
-                    x: e.touches[0].clientX,
-                    y: e.touches[0].clientY
-                };
-            }
-        });
+        }
+    }, passiveOptions);
+
+    // 触摸结束事件
+    canvas.addEventListener('touchend', e => {
+        isDragging = false;
+    });
+
+    // 窗口尺寸变化处理
+    window.addEventListener('resize', () => {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        this.centerCamera();
+    });
+
+    // 添加缩放限制
+    canvas.addEventListener('wheel', e => {
+        const zoomIntensity = 0.1;
+        const newScale = gameState.camera.scale * (e.deltaY > 0 ? 
+            1/(1 + zoomIntensity) : 
+            1 + zoomIntensity);
+        
+        gameState.camera.scale = Math.min(maxScale, Math.max(minScale, newScale));
+        this.centerCamera();
+        e.preventDefault();
+    }, { passive: false });
+
 canvas.addEventListener('touchend', e => {
     if (!isGameActive) return;
     if (Date.now() - touchStartPos.time < 200) {
